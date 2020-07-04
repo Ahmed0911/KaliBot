@@ -50,6 +50,12 @@
 #include "HL_sys_common.h"
 
 /* USER CODE BEGIN (1) */
+#include "HL_mibspi.h"
+
+
+uint16 tx_data[3] = {0x7FFF, 0x7FFD, 0x7FFC};
+uint16 rx_data[3] = {0, 0, 0};
+float speed = 0;
 /* USER CODE END */
 
 /** @fn void main(void)
@@ -69,6 +75,44 @@ uint32 	emacPhyAddress	=	1U;
 int main(void)
 {
 /* USER CODE BEGIN (3) */
+    mibspiInit();
+
+    while(1)
+    {
+        mibspiSetData(mibspiREG3, 0, &tx_data[0]);
+        mibspiTransfer(mibspiREG3, 0);
+
+        // wait end of transfer
+        while( mibspiIsTransferComplete(mibspiREG3, 0) != TRUE );
+
+        // get data
+        mibspiGetData(mibspiREG3, 0, &rx_data[0]);
+        if( rx_data[0] > 8192 ) speed = -(16384 - rx_data[0]);
+        else speed = rx_data[0];
+
+
+        mibspiSetData(mibspiREG3, 0, &tx_data[1]);
+        mibspiTransfer(mibspiREG3, 0);
+
+        // wait end of transfer
+        while( mibspiIsTransferComplete(mibspiREG3, 0) != TRUE );
+
+        // get data
+        mibspiGetData(mibspiREG3, 0, &rx_data[1]);
+
+
+
+
+        mibspiSetData(mibspiREG3, 0, &tx_data[2]);
+        mibspiTransfer(mibspiREG3, 0);
+
+        // wait end of transfer
+        while( mibspiIsTransferComplete(mibspiREG3, 0) != TRUE );
+
+        // get data
+        mibspiGetData(mibspiREG3, 0, &rx_data[2]);
+    }
+
 /* USER CODE END */
 
     return 0;
