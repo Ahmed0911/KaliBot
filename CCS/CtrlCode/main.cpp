@@ -53,9 +53,7 @@ MPU9250Drv mpu9250Drv;
 LSM90DDrv lsm90Drv;
 UBloxGPS gps;
 EtherDriver etherDrv;
-HopeRF	hopeRF;
 IMU imu;
-LaunchMgr launch;
 CANDrv canDrv;
 
 // System Objects
@@ -72,7 +70,6 @@ volatile bool SysTickIntHit = false;
 // Buffers
 #define COMMBUFFERSIZE 1024
 BYTE CommBuffer[COMMBUFFERSIZE];
-BYTE HopeRFbuffer[255];
 
 // Global Functions
 void InitGPS(void);
@@ -90,13 +87,7 @@ float PerfCpuTimeMSMAX;
 float Acc[3];
 float Gyro[3];
 float Mag[3];
-int HopeRSSI;
 int AssistNextChunkToSend = 0;
-
-// HopeData
-float HopeRSSIAvg= -80;
-float HopeRSSIMax = 0;
-float HopeRSSIMin = -200;
 
 // OFFSETS
 #define GYROOFFX -0.85F
@@ -119,10 +110,10 @@ int ESC2PositionCNT;
 float ESC1CurrentIq;
 float ESC2CurrentIq;
 
-// Tracker Data
-int TrackerOpMode = 0;
-int TrackerPanRef = 0;
-int TrackerTiltRef = 0;
+// Autic Data
+bool WheelsEnabled = false;
+int Wheel1Velocity = 0;
+int Wheel2Velocity = 0;
 
 void main(void)
 {
@@ -150,9 +141,7 @@ void main(void)
 	//lsm90Drv.Init();
 	InitGPS(); // init GPS
 	etherDrv.Init();
-	hopeRF.Init();
 	imu.Init();
-    launch.Init();
     canDrv.Init();
 
 	// Systick
@@ -219,20 +208,6 @@ void main(void)
 		// process ethernet (RX)
 		etherDrv.Process(1000/SysTickFrequency); // 10ms tick
 
-		// HopeRF
-		HopeRSSI = hopeRF.ReadRSSI();
-		HopeRSSIAvg = HopeRSSIAvg*0.995 + HopeRSSI*0.005;
-		if( HopeRSSI < HopeRSSIMax  ) HopeRSSIMax = HopeRSSI;
-		if( HopeRSSI > HopeRSSIMin  ) HopeRSSIMin = HopeRSSI;
-
-		// Hope RX Stuff
-		int hopeReceived = hopeRF.Read(HopeRFbuffer);
-		if( hopeReceived > 0)
-		{
-			// Relay data to eth (type 0x41 - HopeRF Data)
-			etherDrv.SendPacket(0x41, (char*)&HopeRFbuffer, hopeReceived);
-		}
-
 		// CAN
 		canDrv.Update();
 		ProcessCANData();
@@ -240,7 +215,28 @@ void main(void)
 		/////////////////////////////////
 		// CTRL STEP
 		/////////////////////////////////
+		int32_t throttle =  sbusRecv.Channels[0];
+		int32_t leftRight =  sbusRecv.Channels[1];
+		int32_t forwBack =  sbusRecv.Channels[2];
 
+		if( throttle > 500 )
+		{
+		    int32_t maxSpeed = 50000*(throttle - 500)/(1706-500); // cnt/sec
+
+		    int32_t forwardSpeed = maxSpeed * (forwBack-1024)/(1024-343);
+		    int32_t sideSpeed = maxSpeed/2 * (leftRight-1024)/(343-1024);
+
+		    Wheel1Velocity = forwardSpeed - sideSpeed;
+		    Wheel2Velocity = forwardSpeed + sideSpeed;
+		    WheelsEnabled = true;
+		}
+		else
+		{
+		    // motors off
+		    WheelsEnabled = false;
+		    Wheel1Velocity = 0;
+		    Wheel2Velocity = 0;
+		}
 
 
 
@@ -248,14 +244,9 @@ void main(void)
 		// OUTPUTS
 		/////////////////////////////////
 
-        // Launch Process
-		launch.Update();
 
 		// DBG LED
 		if( MainLoopCounter%10 == 0) dbgLed.Toggle();
-
-		// send periodic data (ethernet + hopeRF)
-		SendPeriodicDataEth();
 
 		// send periodic CAN Data
 		SendPeriodicDataCAN();
@@ -302,157 +293,18 @@ void SendPeriodicDataCAN(void)
 	int enabled = 1;
 	unsigned char dataToSend[8];
 
-	if( TrackerOpMode == 0) enabled = 0; // disable ESCs
+	if( !WheelsEnabled ) enabled = 0; // disable ESCs
 
-	// ESC1
+	// ESC1 - Wheel1
 	memcpy(&dataToSend[0], &enabled, 4);
-	memcpy(&dataToSend[4], &TrackerPanRef, 4);
+	memcpy(&dataToSend[4], &Wheel1Velocity, 4);
 	canDrv.SendMessage(0x110, dataToSend, 8); // send to ESC1
 
-	// ESC2
+	// ESC2 - Wheel2
 	memcpy(&dataToSend[0], &enabled, 4);
-	memcpy(&dataToSend[4], &TrackerTiltRef, 4);
+	memcpy(&dataToSend[4], &Wheel2Velocity, 4);
 	canDrv.SendMessage(0x210, dataToSend, 8); // send to ESC2
 }
-
-
-void SendPeriodicDataEth(void)
-{
-	// Fill data
-	SCommEthData data;
-	data.LoopCounter = MainLoopCounter;
-	data.ActualMode = 0;//ctrl.Ctrl_Y.ActualMode;
-	data.Roll = imu.Roll;
-	data.Pitch = imu.Pitch;
-	data.Yaw = imu.Yaw;
-	data.dRoll = Gyro[0];
-	data.dPitch = Gyro[1];
-	data.dYaw = Gyro[2];
-	data.AccX = Acc[0];
-	data.AccY = Acc[1];
-	data.AccZ = Acc[2];
-	data.MagX = Mag[0];
-	data.MagY = Mag[1];
-	data.MagZ = Mag[2];
-
-	data.Pressure = baroDrv.PressurePa;
-	data.Temperature = baroDrv.TemperatureC;
-	data.Altitude = 0; //ctrl.Ctrl_Y.Altitude;
-	data.Vertspeed = 0; //ctrl.Ctrl_Y.VertSpeed;
-	data.FuelLevel = 0; //ctrl.Ctrl_Y.FuelPercent;
-	data.BatteryVoltage = adcDrv.BATTVoltage();
-	data.BatteryCurrentA = 0;
-	data.BatteryTotalCharge_mAh = 0;
-	data.MotorThrusts[0] = 0; //(unsigned char)(100*(ctrl.Ctrl_Y.PWM1-1000)/900);
-	data.MotorThrusts[1] = 0; //(unsigned char)(100*(ctrl.Ctrl_Y.PWM2-1000)/900);
-	data.MotorThrusts[2] = 0; //(unsigned char)(100*(ctrl.Ctrl_Y.PWM3-1000)/900);
-	data.MotorThrusts[3] = 0; //(unsigned char)(100*(ctrl.Ctrl_Y.PWM4-1000)/900);
-
-	// gps
-	data.GPSTime = gps.GPSTime;
-	data.FixType = gps.FixType;
-	data.FixFlags = gps.FixFlags;
-	data.NumSV = gps.NumSV;
-	data.Longitude = gps.Longitude;
-	data.Latitude = gps.Latitude;
-	data.HeightMSL = gps.HeightMSL;
-	data.HorizontalAccuracy = gps.HorizontalAccuracy;
-	data.VerticalAccuracy = gps.VerticalAccuracy;
-	data.VelN = gps.VelN;
-	data.VelE = gps.VelE;
-	data.VelD = gps.VelD;
-	data.SpeedAcc = gps.SpeedAcc;
-	memcpy(data.SatCNOs, gps.SatCNOs, sizeof(data.SatCNOs));
-
-	// RF Data + Perf
-	data.EthReceivedCount = etherDrv.ReceivedFrames;
-	data.EthSentCount = etherDrv.SentFrames;
-	data.HopeRXFrameCount = hopeRF.ReceivedFrames;
-	data.HopeRXRSSI = hopeRF.PacketRSSI;
-	data.HopeRSSI = HopeRSSIAvg;
-	data.PerfCpuTimeMS = PerfCpuTimeMS;
-	data.PerfCpuTimeMSMAX = PerfCpuTimeMSMAX;
-	data.PerfLoopTimeMS = PerfLoopTimeMS;
-
-	data.AssistNextChunkToSend = AssistNextChunkToSend;
-
-	// Waypoints
-	data.WaypointCnt = 0;
-	data.WaypointDownloadCounter = 0;
-	double hLat, hLong;
-	llConv.GetHome(hLat, hLong);
-	data.HomeLatitude = hLat*1e7;
-	data.HomeLongitude = hLong*1e7;
-
-	// Launch Mgr
-	data.LaunchStatus1 = launch.WpnState[0];
-	data.LaunchStatus2 = launch.WpnState[1];
-
-	// Tuning data
-	data.TuningData[0] = ESC1OperationMode;
-	data.TuningData[1] = ESC2OperationMode;
-	data.TuningData[2] = ESC1Locked;
-	data.TuningData[3] = ESC2Locked;
-	data.TuningData[4] = ESC1PositionCNT;
-	data.TuningData[5] = ESC2PositionCNT;
-	data.TuningData[6] = ESC1CurrentIq;
-	data.TuningData[7] = ESC2CurrentIq;
-	data.TuningData[8] = 0;
-	data.TuningData[9] = 0;
-
-	// send packet (type 0x20 - data)
-	etherDrv.SendPacket(0x20, (char*)&data, sizeof(data));
-}
-
-void ProcessCommand(int cmd, unsigned char* data, int dataSize)
-{
-	switch( cmd )
-	{
-		case 0x30: // AssistNow
-		{
-			// send data to GPS
-			serialGPS.Write(data, dataSize );
-			AssistNextChunkToSend++;
-			// TODO: Reset AssistNextChunkToSend somewhere!!
-			break;
-		}
-
-		case 0x40: // Relay to HopeRF
-		{
-			// Send to hopeRF
-			hopeRF.Write(data, dataSize);
-			AssistNextChunkToSend = 0;
-			break;
-		}
-
-		case 0x90: // Launch codes
-		{
-			// fill data
-			SCommLaunch launchCmd;
-			memcpy(&launchCmd, data, dataSize);
-
-			if( launchCmd.Command == 1) launch.Arm(launchCmd.Index, launchCmd.CodeTimer);
-			else if( launchCmd.Command == 2  ) launch.Fire(launchCmd.Index, launchCmd.CodeTimer);
-			else if( launchCmd.Command == 3  ) launch.Dearm(launchCmd.Index, launchCmd.CodeTimer);
-
-			break;
-		}
-
-		case 0xA0: // tracker commands
-		{
-			// fill data
-			SCommTrackerCommands trackerCmd;
-			memcpy(&trackerCmd, data, dataSize);
-
-			TrackerOpMode = trackerCmd.Mode;
-			TrackerPanRef = trackerCmd.PanRef;
-			TrackerTiltRef = trackerCmd.TiltRef;
-
-			break;
-		}
-	}
-}
-
 
 
 void InitGPS(void)
@@ -517,7 +369,7 @@ extern "C" void IntGPIOK(void)
 
 extern "C" void IntGPION(void)
 {
-	hopeRF.IntHandler();
+	//hopeRF.IntHandler();
 }
 
 extern "C" void SysTickIntHandler(void)

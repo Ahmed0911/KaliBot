@@ -318,7 +318,7 @@ int main(void)
 }
 
 // Process CAN Data
-#define CANBASEADR 0x200
+#define CANBASEADR 0x100
 void ProcessCANData()
 {
 	int id, len;
@@ -329,13 +329,22 @@ void ProcessCANData()
 		if( id == (CANBASEADR + 0x10))
 		{
 			// posref cmd
-			int enabled;
+			/*int enabled;
 			int positionRefCnt;
 			memcpy(&enabled, &msg[0], 4);
 			memcpy(&positionRefCnt, &msg[4], 4);
 			REFPositionCNT = positionRefCnt;
 			if( enabled ) OperationMode = 4;
-			else OperationMode = 0;
+			else OperationMode = 0;*/
+
+		    // velref cmd
+		    int enabled;
+		    int velocityRefCnt;
+		    memcpy(&enabled, &msg[0], 4);
+		    memcpy(&velocityRefCnt, &msg[4], 4);
+		    REFVelocityCNTs = velocityRefCnt;
+		    if( enabled ) OperationMode = 3;
+		    else OperationMode = 0;
 		}
 	};
 }

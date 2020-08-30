@@ -104,7 +104,7 @@ void EtherDriver::DataReceived(pbuf *p, ip_addr *addr, u16_t port)
 			}
 
 			default:
-				ProcessCommand(data[2], &data[3], dataSize);
+				//ProcessCommand(data[2], &data[3], dataSize);
 				break;
 			}
 	}
